@@ -159,8 +159,8 @@ openStroke.Parent = OpenButton
 
 local Main = Instance.new("Frame")
 Main.Name = "Main"
-Main.Size = UDim2.new(0, 560, 0, 360)
-Main.Position = UDim2.new(0.5, -280, 0.5, -180)
+Main.Size = UDim2.new(0, 520, 0, 330)
+Main.Position = UDim2.new(0.5, -260, 0.5, -165)
 Main.BackgroundColor3 = Color3.fromRGB(12, 13, 16)
 Main.BorderSizePixel = 0
 Main.Parent = ScreenGui
@@ -550,14 +550,6 @@ createToggle(MainPage, "X3 Speed", function(value)
 	setSpeed()
 end, false)
 
-createSectionTitle(MainPage, "Quick Visuals")
-
-for i = 1, 10 do
-	local number = i
-	createAction(MainPage, "Подсветить " .. number, function()
-		highlightExactName(tostring(number), "Number_" .. number)
-	end)
-end
 
 --==================================================
 -- VISUAL PAGE
