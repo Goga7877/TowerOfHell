@@ -364,6 +364,8 @@ end
 
 local farmPage = createPage("Farm")
 local playerPage = createPage("Player")
+local espPage = createPage("ESP")
+local combatPage = createPage("Combat")
 
 farmPage.Visible = true
 
@@ -389,6 +391,12 @@ local function selectPage(name)
     elseif name == "Player" then
         pageTitle.Text = "Player"
         pageSubtitle.Text = "Movement and character"
+    elseif name == "ESP" then
+        pageTitle.Text = "ESP"
+        pageSubtitle.Text = "Role and inventory markers"
+    elseif name == "Combat" then
+        pageTitle.Text = "Combat"
+        pageSubtitle.Text = "Training / target controls"
     end
 end
 
@@ -422,6 +430,8 @@ end
 
 createNavButton("Farm", "Farm", 118)
 createNavButton("Player", "Player", 166)
+createNavButton("ESP", "ESP", 214)
+createNavButton("Combat", "Combat", 262)
 
 makeLabel(
     sidebar,
@@ -842,6 +852,547 @@ createToggle(
         end
     end
 )
+
+--============================================================
+-- ESP PAGE
+--============================================================
+
+local espMurderEnabled = false
+local espSheriffEnabled = false
+local espOthersEnabled = false
+local othersGreen = false
+local espObjects = {}
+
+local function getRoleFromObject(obj)
+    if not obj then return nil end
+
+    local roleNames = {"Role", "role", "PlayerRole", "RoleName"}
+
+    for _, name in ipairs(roleNames) do
+        local value = obj:GetAttribute(name)
+        if typeof(value) == "string" then
+            return value
+        end
+    end
+
+    local ls = obj:FindFirstChild("leaderstats")
+    if ls then
+        local role = ls:FindFirstChild("Role")
+        if role and role:IsA("StringValue") then
+            return role.Value
+        end
+    end
+
+    local role = obj:FindFirstChild("Role", true)
+    if role and role:IsA("StringValue") then
+        return role.Value
+    end
+
+    return nil
+end
+
+local function hasNamedTool(obj, names)
+    if not obj then return false end
+
+    for _, container in ipairs({
+        obj,
+        obj:FindFirstChildOfClass("Backpack"),
+        obj:FindFirstChild("Backpack")
+    }) do
+        if container then
+            for _, item in ipairs(container:GetChildren()) do
+                if item:IsA("Tool") then
+                    local n = string.lower(item.Name)
+                    for _, wanted in ipairs(names) do
+                        if n == string.lower(wanted) or string.find(n, string.lower(wanted), 1, true) then
+                            return true
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return false
+end
+
+local function classifyObject(obj)
+    local role = getRoleFromObject(obj)
+    local roleLower = role and string.lower(role) or ""
+
+    if roleLower == "murderer" or roleLower == "murder" or roleLower == "murderer" then
+        return "Murder"
+    end
+
+    if roleLower == "sheriff" then
+        return "Sheriff"
+    end
+
+    if hasNamedTool(obj, {"Knife"}) then
+        return "Murder"
+    end
+
+    if hasNamedTool(obj, {"Gun", "SheriffGun"}) then
+        return "Sheriff"
+    end
+
+    if roleLower == "innocent" then
+        return "Others"
+    end
+
+    return "Others"
+end
+
+local function removeESP(obj)
+    local data = espObjects[obj]
+    if not data then return end
+
+    for _, instance in ipairs(data) do
+        if instance and instance.Parent then
+            instance:Destroy()
+        end
+    end
+
+    espObjects[obj] = nil
+end
+
+local function addESP(obj, category)
+    if not obj or not obj.Parent then return end
+    if not (obj:IsA("Model") or obj:IsA("BasePart")) then return end
+
+    removeESP(obj)
+
+    local color
+    if category == "Murder" then
+        color = Color3.fromRGB(235, 55, 65)
+    elseif category == "Sheriff" then
+        color = Color3.fromRGB(55, 135, 255)
+    else
+        color = othersGreen and Color3.fromRGB(65, 220, 110) or Color3.fromRGB(255, 255, 255)
+    end
+
+    local list = {}
+
+    local highlight = Instance.new("Highlight")
+    highlight.Name = "MM2HubESP"
+    highlight.Adornee = obj
+    highlight.FillColor = color
+    highlight.OutlineColor = color
+    highlight.FillTransparency = 0.72
+    highlight.OutlineTransparency = 0.05
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.Parent = obj
+    table.insert(list, highlight)
+
+    local adorneePart
+    if obj:IsA("Model") then
+        adorneePart = obj:FindFirstChild("Head") or obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart
+    else
+        adorneePart = obj
+    end
+
+    if adorneePart and adorneePart:IsA("BasePart") then
+        local bill = Instance.new("BillboardGui")
+        bill.Name = "MM2HubRole"
+        bill.Adornee = adorneePart
+        bill.Size = UDim2.new(0, 120, 0, 28)
+        bill.StudsOffset = Vector3.new(0, 3, 0)
+        bill.AlwaysOnTop = true
+        bill.Parent = obj
+
+        local label = Instance.new("TextLabel")
+        label.BackgroundTransparency = 1
+        label.Size = UDim2.fromScale(1, 1)
+        label.Text = category
+        label.Font = Enum.Font.GothamBold
+        label.TextSize = 13
+        label.TextColor3 = color
+        label.TextStrokeTransparency = 0.25
+        label.Parent = bill
+
+        table.insert(list, bill)
+    end
+
+    espObjects[obj] = list
+end
+
+local function refreshESP()
+    local shouldShow = espMurderEnabled or espSheriffEnabled or espOthersEnabled
+
+    if not shouldShow then
+        for obj in pairs(espObjects) do
+            removeESP(obj)
+        end
+        return
+    end
+
+    local seen = {}
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        local char = plr.Character
+        if char then
+            seen[char] = true
+            local category = classifyObject(plr)
+            local enabled =
+                (category == "Murder" and espMurderEnabled)
+                or (category == "Sheriff" and espSheriffEnabled)
+                or (category == "Others" and espOthersEnabled)
+
+            if enabled then
+                addESP(char, category)
+            else
+                removeESP(char)
+            end
+        end
+    end
+
+    -- Поддержка NPC/манекенов с Humanoid в Workspace.
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and obj:FindFirstChildOfClass("Humanoid") then
+            seen[obj] = true
+
+            local category = classifyObject(obj)
+            local enabled =
+                (category == "Murder" and espMurderEnabled)
+                or (category == "Sheriff" and espSheriffEnabled)
+                or (category == "Others" and espOthersEnabled)
+
+            if enabled then
+                addESP(obj, category)
+            else
+                removeESP(obj)
+            end
+        end
+    end
+
+    for obj in pairs(espObjects) do
+        if not seen[obj] or not obj.Parent then
+            removeESP(obj)
+        end
+    end
+end
+
+local espCard = createCard(espPage, "ESP", 5, 5, 500, 315)
+
+createToggle(espCard, "ESP Murder", 55, function(state)
+    espMurderEnabled = state
+    refreshESP()
+end)
+
+createToggle(espCard, "ESP Sheriff", 95, function(state)
+    espSheriffEnabled = state
+    refreshESP()
+end)
+
+createToggle(espCard, "ESP Others", 135, function(state)
+    espOthersEnabled = state
+    refreshESP()
+end)
+
+createToggle(espCard, "Others Green", 175, function(state)
+    othersGreen = state
+    refreshESP()
+end)
+
+makeLabel(
+    espCard,
+    "Murder  = red",
+    UDim2.new(0, 18, 0, 222),
+    UDim2.new(1, -36, 0, 20),
+    Enum.Font.GothamMedium,
+    10,
+    Color3.fromRGB(235, 80, 90)
+)
+
+makeLabel(
+    espCard,
+    "Sheriff = blue",
+    UDim2.new(0, 18, 0, 247),
+    UDim2.new(1, -36, 0, 20),
+    Enum.Font.GothamMedium,
+    10,
+    Color3.fromRGB(70, 145, 255)
+)
+
+makeLabel(
+    espCard,
+    "Others = white / green",
+    UDim2.new(0, 18, 0, 272),
+    UDim2.new(1, -36, 0, 20),
+    Enum.Font.GothamMedium,
+    10,
+    C.Text2
+)
+
+--============================================================
+-- COMBAT PAGE
+--============================================================
+
+local combatRunning = false
+local originalCombatCFrame = nil
+
+local function getRootFromTarget(target)
+    if not target then return nil end
+
+    if target:IsA("Player") then
+        local char = target.Character
+        if char then
+            return char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
+        end
+    elseif target:IsA("Model") then
+        return target:FindFirstChild("HumanoidRootPart")
+            or target:FindFirstChild("Torso")
+            or target.PrimaryPart
+    end
+
+    return nil
+end
+
+local function getHumanoidFromTarget(target)
+    if target:IsA("Player") then
+        local char = target.Character
+        return char and char:FindFirstChildOfClass("Humanoid")
+    end
+
+    return target:FindFirstChildOfClass("Humanoid")
+end
+
+local function findRoleTarget(wantedRole)
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= player then
+            local category = classifyObject(plr)
+            if category == wantedRole then
+                return plr
+            end
+        end
+    end
+
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and obj:FindFirstChildOfClass("Humanoid") then
+            if classifyObject(obj) == wantedRole then
+                return obj
+            end
+        end
+    end
+
+    return nil
+end
+
+local function getAllTargets()
+    local targets = {}
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= player and plr.Character and getHumanoidFromTarget(plr) then
+            table.insert(targets, plr)
+        end
+    end
+
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Model")
+            and obj ~= player.Character
+            and obj:FindFirstChildOfClass("Humanoid")
+            and not Players:GetPlayerFromCharacter(obj) then
+            table.insert(targets, obj)
+        end
+    end
+
+    return targets
+end
+
+local function getAttackTool()
+    local char = player.Character
+    if not char then return nil end
+
+    for _, item in ipairs(char:GetChildren()) do
+        if item:IsA("Tool") then
+            return item
+        end
+    end
+
+    local backpack = player:FindFirstChildOfClass("Backpack")
+    if backpack then
+        for _, item in ipairs(backpack:GetChildren()) do
+            if item:IsA("Tool") then
+                return item
+            end
+        end
+    end
+
+    return nil
+end
+
+local function attackTarget(target)
+    local _, root = getCharacter()
+    local targetRoot = getRootFromTarget(target)
+    local humanoid = getHumanoidFromTarget(target)
+
+    if not root or not targetRoot or not humanoid then
+        return
+    end
+
+    if humanoid.Health <= 0 then
+        return
+    end
+
+    root.CFrame = CFrame.lookAt(
+        targetRoot.Position - targetRoot.CFrame.LookVector * 3,
+        targetRoot.Position
+    )
+
+    local tool = getAttackTool()
+
+    if tool then
+        pcall(function()
+            tool:Activate()
+        end)
+    end
+end
+
+local function stopCombat()
+    combatRunning = false
+
+    if originalCombatCFrame then
+        local _, root = getCharacter()
+        if root then
+            root.CFrame = originalCombatCFrame
+        end
+    end
+
+    originalCombatCFrame = nil
+    setStatus("Combat stopped", C.Text2)
+end
+
+local function runCombat(targets)
+    if combatRunning then return end
+
+    local _, root = getCharacter()
+    if not root then return end
+
+    combatRunning = true
+    originalCombatCFrame = root.CFrame
+    setStatus("Combat running", C.Green)
+
+    task.spawn(function()
+        for _, target in ipairs(targets) do
+            if not combatRunning then break end
+
+            local targetRoot = getRootFromTarget(target)
+            local humanoid = getHumanoidFromTarget(target)
+
+            if targetRoot and humanoid and humanoid.Health > 0 then
+                while combatRunning and humanoid.Parent and humanoid.Health > 0 do
+                    local _, myRoot = getCharacter()
+
+                    if not myRoot then break end
+
+                    myRoot.CFrame = CFrame.lookAt(
+                        targetRoot.Position - targetRoot.CFrame.LookVector * 3,
+                        targetRoot.Position
+                    )
+
+                    local tool = getAttackTool()
+
+                    if tool then
+                        pcall(function()
+                            tool:Activate()
+                        end)
+                    end
+
+                    task.wait(0.08)
+                end
+            end
+        end
+
+        if combatRunning then
+            stopCombat()
+        end
+    end)
+end
+
+local combatCard = createCard(combatPage, "Combat", 5, 5, 500, 350)
+
+makeLabel(
+    combatCard,
+    "Uses the normal Tool:Activate() system of the game.",
+    UDim2.new(0, 18, 0, 42),
+    UDim2.new(1, -36, 0, 30),
+    Enum.Font.GothamMedium,
+    10,
+    C.Text3
+)
+
+local function combatButton(text, y, callback)
+    local b = Instance.new("TextButton")
+    b.Position = UDim2.new(0, 16, 0, y)
+    b.Size = UDim2.new(1, -32, 0, 43)
+    b.BackgroundColor3 = C.Card2
+    b.BorderSizePixel = 0
+    b.AutoButtonColor = false
+    b.Text = text
+    b.TextColor3 = C.Text
+    b.TextSize = 11
+    b.Font = Enum.Font.GothamBold
+    b.ZIndex = 14
+    b.Parent = combatCard
+
+    makeCorner(b, 9)
+    makeStroke(b, C.BorderLight, 1, 0.2)
+
+    b.MouseButton1Click:Connect(callback)
+
+    return b
+end
+
+combatButton("KILL ALL", 82, function()
+    runCombat(getAllTargets())
+end)
+
+combatButton("KILL SHERIFF", 132, function()
+    local target = findRoleTarget("Sheriff")
+    if target then
+        runCombat({target})
+    else
+        setStatus("Sheriff not found", C.Red)
+    end
+end)
+
+combatButton("KILL MURDER", 182, function()
+    local target = findRoleTarget("Murder")
+    if target then
+        runCombat({target})
+    else
+        setStatus("Murder not found", C.Red)
+    end
+end)
+
+combatButton("STOP / RETURN", 232, function()
+    stopCombat()
+end)
+
+makeLabel(
+    combatCard,
+    "Targets include players and Humanoid NPCs.",
+    UDim2.new(0, 18, 0, 294),
+    UDim2.new(1, -36, 0, 20),
+    Enum.Font.GothamMedium,
+    9,
+    C.Text3
+)
+
+-- ESP refresh loop
+task.spawn(function()
+    while gui.Parent do
+        refreshESP()
+        task.wait(0.5)
+    end
+end)
+
+Players.PlayerAdded:Connect(function(plr)
+    plr.CharacterAdded:Connect(function()
+        task.wait(0.2)
+        refreshESP()
+    end)
+end)
 
 --============================================================
 -- DRAG WINDOW
