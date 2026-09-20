@@ -565,12 +565,21 @@ end
 
 createSectionTitle(VisualPage, "Object search")
 
+-- Одна кнопка подсвечивает только объекты с названием "Button"
+-- без учёта регистра: Button, button, BUtton, BUTTon и т.д.
 createAction(VisualPage, "Подсветить Button", function()
-	highlightContainsName("button", "Button")
+	clearHighlightGroup("Button")
+
+	for _, object in ipairs(workspace:GetDescendants()) do
+		if string.lower(object.Name) == "button" then
+			addHighlight(object, "Button")
+		end
+	end
 end)
 
 createAction(VisualPage, "Убрать подсветку Button", function()
 	clearHighlightGroup("Button")
+	clearHighlightGroup("Button_Variants")
 end)
 
 createAction(VisualPage, "Убрать всю подсветку", function()
@@ -583,14 +592,13 @@ createAction(VisualPage, "Убрать всю подсветку", function()
 	end
 end)
 
-createSectionTitle(VisualPage, "Numbers 1–10")
+createSectionTitle(VisualPage, "Numbered objects")
 
-for i = 1, 10 do
-	local number = i
-	createAction(VisualPage, "Подсветить " .. number, function()
-		highlightExactName(tostring(number), "Number_" .. number)
-	end)
-end
+createAction(VisualPage, "Подсветить 1–10", function()
+	for i = 1, 10 do
+		highlightExactName(tostring(i), "Number_" .. i)
+	end
+end)
 
 --==================================================
 -- EGG PAGE
@@ -598,12 +606,12 @@ end
 
 createSectionTitle(EggsPage, "Egg1 – Egg10")
 
-for i = 1, 10 do
-	local number = i
-	createAction(EggsPage, "Подсветить Egg" .. number, function()
-		highlightExactName("Egg" .. number, "Egg_" .. number)
-	end)
-end
+-- Одна кнопка подсвечивает Egg1, Egg2, ... Egg10
+createAction(EggsPage, "Подсветить Egg", function()
+	for i = 1, 10 do
+		highlightExactName("Egg" .. i, "Egg_" .. i)
+	end
+end)
 
 createAction(EggsPage, "Убрать подсветку Egg", function()
 	for i = 1, 10 do
@@ -617,12 +625,12 @@ end)
 
 createSectionTitle(BadgesPage, "Badge1 – Badge10")
 
-for i = 1, 10 do
-	local number = i
-	createAction(BadgesPage, "Подсветить Badge" .. number, function()
-		highlightExactName("Badge" .. number, "Badge_" .. number)
-	end)
-end
+-- Одна кнопка подсвечивает Badge1, Badge2, ... Badge10
+createAction(BadgesPage, "Подсветить Badge", function()
+	for i = 1, 10 do
+		highlightExactName("Badge" .. i, "Badge_" .. i)
+	end
+end)
 
 createAction(BadgesPage, "Убрать подсветку Badge", function()
 	for i = 1, 10 do
