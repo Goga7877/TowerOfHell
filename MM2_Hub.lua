@@ -393,7 +393,7 @@ local function selectPage(name)
         pageSubtitle.Text = "Movement and character"
     elseif name == "ESP" then
         pageTitle.Text = "ESP"
-        pageSubtitle.Text = "Role and inventory markers"
+        pageSubtitle.Text = "Role markers"
     elseif name == "Combat" then
         pageTitle.Text = "Combat"
         pageSubtitle.Text = "Training / target controls"
@@ -860,63 +860,157 @@ createToggle(
 local espMurderEnabled = false
 local espSheriffEnabled = false
 local espOthersEnabled = false
-local othersGreen = false
 local espObjects = {}
 
+local MURDER_COLOR = Color3.fromRGB(235, 45, 55)
+local SHERIFF_COLOR = Color3.fromRGB(55, 135, 255)
+local OTHERS_COLOR = Color3.fromRGB(255, 255, 255)
+
+local function normalizeRole(value)
+    if typeof(value) ~= "string" then
+        return nil
+    end
+
+    local role = string.lower(value)
+    role = role:gsub("%s+", "")
+    role = role:gsub("[_%-]", "")
+
+    if role == "murder" or role == "murderer" or role == "murdererrole" then
+        return "Murder"
+    end
+
+    if role == "sheriff" or role == "sheriffrole" then
+        return "Sheriff"
+    end
+
+    if role == "innocent" or role == "innocentrole" or role == "civilian" then
+        return "Others"
+    end
+
+    return nil
+end
+
+local function readRoleValue(container)
+    if not container then
+        return nil
+    end
+
+    local directNames = {
+        "Role",
+        "role",
+        "RoleName",
+        "PlayerRole",
+        "CurrentRole",
+        "CurrentRoleName"
+    }
+
+    -- 1. Attributes: Role / RoleName / etc.
+    for _, name in ipairs(directNames) do
+        local value = container:GetAttribute(name)
+        local normalized = normalizeRole(value)
+        if normalized then
+            return normalized
+        end
+    end
+
+    -- 2. Team name. This is commonly how role is stored in simple MM2 copies.
+    local team = container:IsA("Player") and container.Team or nil
+    if team then
+        local normalized = normalizeRole(team.Name)
+        if normalized then
+            return normalized
+        end
+    end
+
+    -- 3. Direct Role StringValue / ObjectValue / similar value objects.
+    for _, name in ipairs(directNames) do
+        local valueObject = container:FindFirstChild(name)
+        if valueObject then
+            if valueObject:IsA("StringValue") then
+                local normalized = normalizeRole(valueObject.Value)
+                if normalized then
+                    return normalized
+                end
+            elseif valueObject:IsA("ObjectValue") and valueObject.Value then
+                local normalized = normalizeRole(valueObject.Value.Name)
+                if normalized then
+                    return normalized
+                end
+            end
+        end
+    end
+
+    -- 4. leaderstats Role.
+    local leaderstats = container:FindFirstChild("leaderstats")
+    if leaderstats then
+        for _, valueObject in ipairs(leaderstats:GetChildren()) do
+            if valueObject:IsA("StringValue") then
+                local normalized = normalizeRole(valueObject.Value)
+                if normalized then
+                    return normalized
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
 local function getRoleFromObject(obj)
-    if not obj then return nil end
-
-    local roleNames = {"Role", "role", "PlayerRole", "RoleName"}
-
-    for _, name in ipairs(roleNames) do
-        local value = obj:GetAttribute(name)
-        if typeof(value) == "string" then
-            return value
-        end
+    if not obj then
+        return nil
     end
 
-    local ls = obj:FindFirstChild("leaderstats")
-    if ls then
-        local role = ls:FindFirstChild("Role")
-        if role and role:IsA("StringValue") then
-            return role.Value
+    -- Players: check player first, then their live character.
+    local playerObject = obj:IsA("Player") and obj or Players:GetPlayerFromCharacter(obj)
+
+    if playerObject then
+        local role = readRoleValue(playerObject)
+        if role then
+            return role
         end
+
+        if playerObject.Character then
+            role = readRoleValue(playerObject.Character)
+            if role then
+                return role
+            end
+        end
+
+        return nil
     end
 
-    local role = obj:FindFirstChild("Role", true)
-    if role and role:IsA("StringValue") then
-        return role.Value
+    -- NPC/model: check model itself first.
+    local role = readRoleValue(obj)
+    if role then
+        return role
     end
 
     return nil
 end
 
 local function classifyObject(obj)
-    -- ESP использует ТОЛЬКО роль объекта.
-    -- Knife / Gun / другие предметы вообще не проверяются.
-    local role = getRoleFromObject(obj)
-    if not role then
-        return "Others"
+    -- ESP is role-only. It NEVER checks Gun, Knife, Backpack or Tools.
+    return getRoleFromObject(obj) or "Others"
+end
+
+local function getESPColor(category)
+    if category == "Murder" then
+        return MURDER_COLOR
+    elseif category == "Sheriff" then
+        return SHERIFF_COLOR
     end
 
-    local roleLower = string.lower(string.gsub(role, "%s+", ""))
-
-    if roleLower == "murderer" or roleLower == "murder" then
-        return "Murder"
-    end
-
-    if roleLower == "sheriff" then
-        return "Sheriff"
-    end
-
-    return "Others"
+    return OTHERS_COLOR
 end
 
 local function removeESP(obj)
     local data = espObjects[obj]
-    if not data then return end
+    if not data then
+        return
+    end
 
-    for _, instance in ipairs(data) do
+    for _, instance in ipairs(data.instances or {}) do
         if instance and instance.Parent then
             instance:Destroy()
         end
@@ -926,20 +1020,22 @@ local function removeESP(obj)
 end
 
 local function addESP(obj, category)
-    if not obj or not obj.Parent then return end
-    if not (obj:IsA("Model") or obj:IsA("BasePart")) then return end
+    if not obj or not obj.Parent then
+        return
+    end
+
+    if not obj:IsA("Model") then
+        return
+    end
+
+    local existing = espObjects[obj]
+    if existing and existing.category == category and existing.adorned == obj then
+        return
+    end
 
     removeESP(obj)
 
-    local color
-    if category == "Murder" then
-        color = Color3.fromRGB(235, 55, 65)
-    elseif category == "Sheriff" then
-        color = Color3.fromRGB(55, 135, 255)
-    else
-        color = othersGreen and Color3.fromRGB(65, 220, 110) or Color3.fromRGB(255, 255, 255)
-    end
-
+    local color = getESPColor(category)
     local list = {}
 
     local highlight = Instance.new("Highlight")
@@ -947,26 +1043,28 @@ local function addESP(obj, category)
     highlight.Adornee = obj
     highlight.FillColor = color
     highlight.OutlineColor = color
-    highlight.FillTransparency = 0.72
-    highlight.OutlineTransparency = 0.05
+    highlight.FillTransparency = 0.58
+    highlight.OutlineTransparency = 0
     highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.Enabled = true
     highlight.Parent = obj
     table.insert(list, highlight)
 
-    local adorneePart
-    if obj:IsA("Model") then
-        adorneePart = obj:FindFirstChild("Head") or obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart
-    else
-        adorneePart = obj
-    end
+    local head = obj:FindFirstChild("Head", true)
+    local root = obj:FindFirstChild("HumanoidRootPart", true)
+    local adorneePart = (head and head:IsA("BasePart") and head)
+        or (root and root:IsA("BasePart") and root)
+        or obj.PrimaryPart
 
+    local bill
     if adorneePart and adorneePart:IsA("BasePart") then
-        local bill = Instance.new("BillboardGui")
+        bill = Instance.new("BillboardGui")
         bill.Name = "MM2HubRole"
         bill.Adornee = adorneePart
-        bill.Size = UDim2.new(0, 120, 0, 28)
-        bill.StudsOffset = Vector3.new(0, 3, 0)
+        bill.Size = UDim2.new(0, 120, 0, 26)
+        bill.StudsOffset = Vector3.new(0, 3.2, 0)
         bill.AlwaysOnTop = true
+        bill.ResetOnSpawn = false
         bill.Parent = obj
 
         local label = Instance.new("TextLabel")
@@ -976,19 +1074,33 @@ local function addESP(obj, category)
         label.Font = Enum.Font.GothamBold
         label.TextSize = 13
         label.TextColor3 = color
-        label.TextStrokeTransparency = 0.25
+        label.TextStrokeTransparency = 0
         label.Parent = bill
 
         table.insert(list, bill)
     end
 
-    espObjects[obj] = list
+    espObjects[obj] = {
+        instances = list,
+        category = category,
+        adorned = obj,
+        highlight = highlight,
+        bill = bill
+    }
+end
+
+local function isESPCharacterModel(obj)
+    if not obj or not obj:IsA("Model") then
+        return false
+    end
+
+    return obj:FindFirstChildOfClass("Humanoid") ~= nil
 end
 
 local function refreshESP()
-    local shouldShow = espMurderEnabled or espSheriffEnabled or espOthersEnabled
+    local anyEnabled = espMurderEnabled or espSheriffEnabled or espOthersEnabled
 
-    if not shouldShow then
+    if not anyEnabled then
         for obj in pairs(espObjects) do
             removeESP(obj)
         end
@@ -997,27 +1109,31 @@ local function refreshESP()
 
     local seen = {}
 
+    -- Players.
     for _, plr in ipairs(Players:GetPlayers()) do
-        local char = plr.Character
-        if char then
-            seen[char] = true
-            local category = classifyObject(plr)
-            local enabled =
-                (category == "Murder" and espMurderEnabled)
-                or (category == "Sheriff" and espSheriffEnabled)
-                or (category == "Others" and espOthersEnabled)
+        if plr ~= player then
+            local char = plr.Character
+            if char and isESPCharacterModel(char) then
+                seen[char] = true
 
-            if enabled then
-                addESP(char, category)
-            else
-                removeESP(char)
+                local category = classifyObject(plr)
+                local enabled =
+                    (category == "Murder" and espMurderEnabled)
+                    or (category == "Sheriff" and espSheriffEnabled)
+                    or (category == "Others" and espOthersEnabled)
+
+                if enabled then
+                    addESP(char, category)
+                else
+                    removeESP(char)
+                end
             end
         end
     end
 
-    -- Поддержка NPC/манекенов с Humanoid в Workspace.
+    -- NPCs / dummies with Humanoid. Player characters are skipped above.
     for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("Model") and obj:FindFirstChildOfClass("Humanoid") then
+        if isESPCharacterModel(obj) and not Players:GetPlayerFromCharacter(obj) then
             seen[obj] = true
 
             local category = classifyObject(obj)
@@ -1034,6 +1150,7 @@ local function refreshESP()
         end
     end
 
+    -- Remove stale ESP immediately.
     for obj in pairs(espObjects) do
         if not seen[obj] or not obj.Parent then
             removeESP(obj)
@@ -1041,7 +1158,7 @@ local function refreshESP()
     end
 end
 
-local espCard = createCard(espPage, "ESP", 5, 5, 500, 315)
+local espCard = createCard(espPage, "ESP", 5, 5, 500, 275)
 
 createToggle(espCard, "ESP Murder", 55, function(state)
     espMurderEnabled = state
@@ -1058,39 +1175,24 @@ createToggle(espCard, "ESP Others", 135, function(state)
     refreshESP()
 end)
 
-createToggle(espCard, "Others Green", 175, function(state)
-    othersGreen = state
-    refreshESP()
-end)
-
 makeLabel(
     espCard,
-    "Murder  = red",
-    UDim2.new(0, 18, 0, 222),
-    UDim2.new(1, -36, 0, 20),
-    Enum.Font.GothamMedium,
-    10,
-    Color3.fromRGB(235, 80, 90)
-)
-
-makeLabel(
-    espCard,
-    "Sheriff = blue",
-    UDim2.new(0, 18, 0, 247),
-    UDim2.new(1, -36, 0, 20),
-    Enum.Font.GothamMedium,
-    10,
-    Color3.fromRGB(70, 145, 255)
-)
-
-makeLabel(
-    espCard,
-    "Others = white / green",
-    UDim2.new(0, 18, 0, 272),
-    UDim2.new(1, -36, 0, 20),
+    "Murder = RED   |   Sheriff = BLUE   |   Others = WHITE",
+    UDim2.new(0, 18, 0, 195),
+    UDim2.new(1, -36, 0, 22),
     Enum.Font.GothamMedium,
     10,
     C.Text2
+)
+
+makeLabel(
+    espCard,
+    "Only the current role is used. No Gun / Knife checks.",
+    UDim2.new(0, 18, 0, 222),
+    UDim2.new(1, -36, 0, 22),
+    Enum.Font.GothamMedium,
+    9,
+    C.Text3
 )
 
 --============================================================
