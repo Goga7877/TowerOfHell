@@ -891,53 +891,22 @@ local function getRoleFromObject(obj)
     return nil
 end
 
-local function hasNamedTool(obj, names)
-    if not obj then return false end
-
-    for _, container in ipairs({
-        obj,
-        obj:FindFirstChildOfClass("Backpack"),
-        obj:FindFirstChild("Backpack")
-    }) do
-        if container then
-            for _, item in ipairs(container:GetChildren()) do
-                if item:IsA("Tool") then
-                    local n = string.lower(item.Name)
-                    for _, wanted in ipairs(names) do
-                        if n == string.lower(wanted) or string.find(n, string.lower(wanted), 1, true) then
-                            return true
-                        end
-                    end
-                end
-            end
-        end
+local function classifyObject(obj)
+    -- ESP использует ТОЛЬКО роль объекта.
+    -- Knife / Gun / другие предметы вообще не проверяются.
+    local role = getRoleFromObject(obj)
+    if not role then
+        return "Others"
     end
 
-    return false
-end
+    local roleLower = string.lower(string.gsub(role, "%s+", ""))
 
-local function classifyObject(obj)
-    local role = getRoleFromObject(obj)
-    local roleLower = role and string.lower(role) or ""
-
-    if roleLower == "murderer" or roleLower == "murder" or roleLower == "murderer" then
+    if roleLower == "murderer" or roleLower == "murder" then
         return "Murder"
     end
 
     if roleLower == "sheriff" then
         return "Sheriff"
-    end
-
-    if hasNamedTool(obj, {"Knife"}) then
-        return "Murder"
-    end
-
-    if hasNamedTool(obj, {"Gun", "SheriffGun"}) then
-        return "Sheriff"
-    end
-
-    if roleLower == "innocent" then
-        return "Others"
     end
 
     return "Others"
