@@ -23,6 +23,7 @@ local HIGHLIGHT_COLOR = Color3.fromRGB(0, 170, 255)
 local infJump = false
 local godMode = false
 local speed3x = false
+local instantPrompts = false
 
 local activeHighlights = {}
 local characterConnections = {}
@@ -550,6 +551,23 @@ createToggle(MainPage, "X3 Speed", function(value)
 	setSpeed()
 end, false)
 
+createToggle(MainPage, "Instant Proximity Prompt", function(value)
+	instantPrompts = value
+
+	for _, object in ipairs(workspace:GetDescendants()) do
+		if object:IsA("ProximityPrompt") then
+			if value then
+				if object:GetAttribute("FarmMoneyOriginalHoldDuration") == nil then
+					object:SetAttribute("FarmMoneyOriginalHoldDuration", object.HoldDuration)
+				end
+				object.HoldDuration = 0
+			else
+				object.HoldDuration = object:GetAttribute("FarmMoneyOriginalHoldDuration") or 0.5
+			end
+		end
+	end
+end, false)
+
 
 --==================================================
 -- VISUAL PAGE
@@ -668,6 +686,36 @@ UserInputService.JumpRequest:Connect(function()
 	local humanoid = getHumanoid()
 	if humanoid then
 		humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+	end
+end)
+
+--==================================================
+-- PROXIMITY PROMPTS
+--==================================================
+
+local function setupProximityPrompt(prompt)
+	if not prompt:IsA("ProximityPrompt") then
+		return
+	end
+
+	if prompt:GetAttribute("FarmMoneyOriginalHoldDuration") == nil then
+		prompt:SetAttribute("FarmMoneyOriginalHoldDuration", prompt.HoldDuration)
+	end
+
+	if instantPrompts then
+		prompt.HoldDuration = 0
+	end
+end
+
+for _, object in ipairs(workspace:GetDescendants()) do
+	if object:IsA("ProximityPrompt") then
+		setupProximityPrompt(object)
+	end
+end
+
+workspace.DescendantAdded:Connect(function(object)
+	if object:IsA("ProximityPrompt") then
+		task.defer(setupProximityPrompt, object)
 	end
 end)
 
