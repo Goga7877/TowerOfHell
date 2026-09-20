@@ -1,648 +1,763 @@
---[[
-    FARM MONEY GUI
-    LocalScript
-    StarterPlayer > StarterPlayerScripts
-
-    Возможности:
-    • FARM MONEY
-    • Полёт к coin_server
-    • Настройка скорости
-    • Открытие/закрытие меню
-    • Кнопка открытия в левом нижнем углу
-    • Крестик закрытия
-    • Перемещение меню мышью/пальцем
-    • Поддержка Touch + Mouse
-    • Автоматический сброс после респавна
-]]
+-- FarmMoney.lua
+-- LocalScript for Roblox Studio / your own experience
+-- Compact mobile-friendly menu inspired by the provided screenshot.
 
 local Players = game:GetService("Players")
-local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
 
-local player = Players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui")
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
-local DEFAULT_SPEED = 16
-local MIN_SPEED = 8
-local MAX_SPEED = 100
-local TARGET_NAME = "coin_server"
-local CONTAINER_NAME = "CoinContainer"
+--==================================================
+-- CONFIG
+--==================================================
 
-local currentSpeed = DEFAULT_SPEED
-local isFlying = false
-local activeTween = nil
+local SPEED_MULTIPLIER = 3
+local HIGHLIGHT_COLOR = Color3.fromRGB(0, 170, 255)
 
-local oldGui = playerGui:FindFirstChild("FarmMoneyGui")
+--==================================================
+-- STATE
+--==================================================
+
+local infJump = false
+local godMode = false
+local speed3x = false
+
+local activeHighlights = {}
+local characterConnections = {}
+
+--==================================================
+-- HELPERS
+--==================================================
+
+local function disconnectAll(list)
+	for _, connection in pairs(list) do
+		if connection and connection.Disconnect then
+			connection:Disconnect()
+		end
+	end
+	table.clear(list)
+end
+
+local function getHumanoid()
+	local character = LocalPlayer.Character
+	if not character then
+		return nil
+	end
+	return character:FindFirstChildOfClass("Humanoid")
+end
+
+local function setSpeed()
+	local humanoid = getHumanoid()
+	if humanoid then
+		humanoid.WalkSpeed = speed3x and 48 or 16
+	end
+end
+
+local function applyGodMode()
+	local humanoid = getHumanoid()
+	if not humanoid then
+		return
+	end
+
+	if godMode then
+		humanoid.MaxHealth = math.huge
+		humanoid.Health = math.huge
+		humanoid:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+	else
+		humanoid:SetStateEnabled(Enum.HumanoidStateType.Dead, true)
+		if humanoid.MaxHealth == math.huge then
+			humanoid.MaxHealth = 100
+			humanoid.Health = math.min(humanoid.Health, humanoid.MaxHealth)
+		end
+	end
+end
+
+--==================================================
+-- CHARACTER SETUP
+--==================================================
+
+local function setupCharacter(character)
+	disconnectAll(characterConnections)
+
+	local humanoid = character:WaitForChild("Humanoid", 10)
+	if not humanoid then
+		return
+	end
+
+	table.insert(characterConnections, humanoid.HealthChanged:Connect(function()
+		if godMode and humanoid.Parent then
+			if humanoid.Health < math.huge then
+				humanoid.Health = math.huge
+			end
+		end
+	end))
+
+	table.insert(characterConnections, humanoid.Died:Connect(function()
+		-- In a client script we cannot guarantee server-side immortality.
+		-- This keeps the local humanoid protected while alive.
+	end))
+
+	task.defer(function()
+		setSpeed()
+		applyGodMode()
+	end)
+end
+
+if LocalPlayer.Character then
+	task.spawn(setupCharacter, LocalPlayer.Character)
+end
+
+LocalPlayer.CharacterAdded:Connect(setupCharacter)
+
+--==================================================
+-- GUI ROOT
+--==================================================
+
+local oldGui = PlayerGui:FindFirstChild("FarmMoneyGUI")
 if oldGui then
 	oldGui:Destroy()
 end
 
-local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "FarmMoneyGui"
-screenGui.ResetOnSpawn = false
-screenGui.IgnoreGuiInset = true
-screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-screenGui.Parent = playerGui
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "FarmMoneyGUI"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent = PlayerGui
 
-local openButton = Instance.new("TextButton")
-openButton.Name = "OpenButton"
-openButton.AnchorPoint = Vector2.new(0, 1)
-openButton.Position = UDim2.new(0, 18, 1, -18)
-openButton.Size = UDim2.new(0, 58, 0, 58)
-openButton.BackgroundColor3 = Color3.fromRGB(25, 27, 38)
-openButton.BackgroundTransparency = 0.05
-openButton.BorderSizePixel = 0
-openButton.AutoButtonColor = false
-openButton.Text = "$"
-openButton.TextColor3 = Color3.fromRGB(120, 255, 160)
-openButton.TextSize = 26
-openButton.Font = Enum.Font.GothamBold
-openButton.ZIndex = 20
-openButton.Parent = screenGui
+--==================================================
+-- OPEN BUTTON
+--==================================================
+
+local OpenButton = Instance.new("TextButton")
+OpenButton.Name = "OpenButton"
+OpenButton.Size = UDim2.fromOffset(52, 52)
+OpenButton.Position = UDim2.new(0, 12, 0.5, -26)
+OpenButton.BackgroundColor3 = Color3.fromRGB(18, 20, 24)
+OpenButton.BorderSizePixel = 0
+OpenButton.Text = "FM"
+OpenButton.TextColor3 = Color3.fromRGB(0, 190, 255)
+OpenButton.TextSize = 17
+OpenButton.Font = Enum.Font.GothamBold
+OpenButton.Visible = false
+OpenButton.Parent = ScreenGui
 
 local openCorner = Instance.new("UICorner")
 openCorner.CornerRadius = UDim.new(1, 0)
-openCorner.Parent = openButton
+openCorner.Parent = OpenButton
 
 local openStroke = Instance.new("UIStroke")
-openStroke.Color = Color3.fromRGB(90, 220, 140)
-openStroke.Thickness = 2
-openStroke.Transparency = 0.25
-openStroke.Parent = openButton
+openStroke.Color = Color3.fromRGB(0, 120, 180)
+openStroke.Thickness = 1
+openStroke.Parent = OpenButton
 
-local main = Instance.new("Frame")
-main.Name = "Main"
-main.AnchorPoint = Vector2.new(0.5, 0.5)
-main.Position = UDim2.new(0.5, 0, 0.5, 0)
-main.Size = UDim2.new(0, 270, 0, 185)
-main.BackgroundColor3 = Color3.fromRGB(20, 22, 32)
-main.BackgroundTransparency = 0.03
-main.BorderSizePixel = 0
-main.Visible = true
-main.ZIndex = 5
-main.Parent = screenGui
+--==================================================
+-- MAIN WINDOW
+--==================================================
+
+local Main = Instance.new("Frame")
+Main.Name = "Main"
+Main.Size = UDim2.new(0, 560, 0, 360)
+Main.Position = UDim2.new(0.5, -280, 0.5, -180)
+Main.BackgroundColor3 = Color3.fromRGB(12, 13, 16)
+Main.BorderSizePixel = 0
+Main.Parent = ScreenGui
 
 local mainCorner = Instance.new("UICorner")
-mainCorner.CornerRadius = UDim.new(0, 16)
-mainCorner.Parent = main
+mainCorner.CornerRadius = UDim.new(0, 10)
+mainCorner.Parent = Main
 
 local mainStroke = Instance.new("UIStroke")
-mainStroke.Color = Color3.fromRGB(75, 80, 105)
-mainStroke.Thickness = 1.5
-mainStroke.Transparency = 0.15
-mainStroke.Parent = main
+mainStroke.Color = Color3.fromRGB(38, 42, 50)
+mainStroke.Thickness = 1
+mainStroke.Parent = Main
 
-local topBar = Instance.new("Frame")
-topBar.Name = "TopBar"
-topBar.Position = UDim2.new(0, 0, 0, 0)
-topBar.Size = UDim2.new(1, 0, 0, 45)
-topBar.BackgroundColor3 = Color3.fromRGB(28, 31, 45)
-topBar.BorderSizePixel = 0
-topBar.ZIndex = 6
-topBar.Parent = main
+--==================================================
+-- HEADER
+--==================================================
 
-local topCorner = Instance.new("UICorner")
-topCorner.CornerRadius = UDim.new(0, 16)
-topCorner.Parent = topBar
+local Header = Instance.new("Frame")
+Header.Size = UDim2.new(1, 0, 0, 50)
+Header.BackgroundColor3 = Color3.fromRGB(15, 16, 20)
+Header.BorderSizePixel = 0
+Header.Parent = Main
 
-local topMask = Instance.new("Frame")
-topMask.Position = UDim2.new(0, 0, 1, -15)
-topMask.Size = UDim2.new(1, 0, 0, 15)
-topMask.BackgroundColor3 = Color3.fromRGB(28, 31, 45)
-topMask.BorderSizePixel = 0
-topMask.ZIndex = 6
-topMask.Parent = topBar
+local HeaderCorner = Instance.new("UICorner")
+HeaderCorner.CornerRadius = UDim.new(0, 10)
+HeaderCorner.Parent = Header
 
-local title = Instance.new("TextLabel")
-title.Name = "Title"
-title.BackgroundTransparency = 1
-title.Position = UDim2.new(0, 15, 0, 5)
-title.Size = UDim2.new(1, -60, 0, 22)
-title.Text = "FARM MONEY"
-title.TextColor3 = Color3.fromRGB(255, 255, 255)
-title.TextSize = 16
-title.Font = Enum.Font.GothamBold
-title.TextXAlignment = Enum.TextXAlignment.Left
-title.ZIndex = 7
-title.Parent = topBar
+local Title = Instance.new("TextLabel")
+Title.BackgroundTransparency = 1
+Title.Position = UDim2.fromOffset(16, 0)
+Title.Size = UDim2.new(1, -70, 1, 0)
+Title.Text = "FARM MONEY"
+Title.TextColor3 = Color3.fromRGB(240, 240, 245)
+Title.TextSize = 20
+Title.Font = Enum.Font.GothamBold
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = Header
 
-local subtitle = Instance.new("TextLabel")
-subtitle.Name = "Subtitle"
-subtitle.BackgroundTransparency = 1
-subtitle.Position = UDim2.new(0, 15, 0, 25)
-subtitle.Size = UDim2.new(1, -60, 0, 15)
-subtitle.Text = "Coin farming system"
-subtitle.TextColor3 = Color3.fromRGB(145, 150, 170)
-subtitle.TextSize = 10
-subtitle.Font = Enum.Font.GothamMedium
-subtitle.TextXAlignment = Enum.TextXAlignment.Left
-subtitle.ZIndex = 7
-subtitle.Parent = topBar
-
-local closeButton = Instance.new("TextButton")
-closeButton.Name = "Close"
-closeButton.AnchorPoint = Vector2.new(1, 0)
-closeButton.Position = UDim2.new(1, -8, 0, 8)
-closeButton.Size = UDim2.new(0, 30, 0, 30)
-closeButton.BackgroundColor3 = Color3.fromRGB(55, 58, 72)
-closeButton.BorderSizePixel = 0
-closeButton.AutoButtonColor = false
-closeButton.Text = "×"
-closeButton.TextColor3 = Color3.fromRGB(220, 225, 235)
-closeButton.TextSize = 22
-closeButton.Font = Enum.Font.GothamBold
-closeButton.ZIndex = 10
-closeButton.Parent = topBar
+local CloseButton = Instance.new("TextButton")
+CloseButton.Size = UDim2.fromOffset(40, 40)
+CloseButton.Position = UDim2.new(1, -45, 0, 5)
+CloseButton.BackgroundColor3 = Color3.fromRGB(25, 27, 32)
+CloseButton.BorderSizePixel = 0
+CloseButton.Text = "×"
+CloseButton.TextColor3 = Color3.fromRGB(220, 220, 225)
+CloseButton.TextSize = 25
+CloseButton.Font = Enum.Font.GothamBold
+CloseButton.Parent = Header
 
 local closeCorner = Instance.new("UICorner")
 closeCorner.CornerRadius = UDim.new(0, 8)
-closeCorner.Parent = closeButton
+closeCorner.Parent = CloseButton
 
-local statusFrame = Instance.new("Frame")
-statusFrame.Name = "Status"
-statusFrame.Position = UDim2.new(0, 15, 0, 58)
-statusFrame.Size = UDim2.new(1, -30, 0, 28)
-statusFrame.BackgroundColor3 = Color3.fromRGB(30, 34, 47)
-statusFrame.BorderSizePixel = 0
-statusFrame.ZIndex = 6
-statusFrame.Parent = main
+--==================================================
+-- SIDEBAR
+--==================================================
 
-local statusCorner = Instance.new("UICorner")
-statusCorner.CornerRadius = UDim.new(0, 8)
-statusCorner.Parent = statusFrame
+local Sidebar = Instance.new("Frame")
+Sidebar.Size = UDim2.new(0, 135, 1, -50)
+Sidebar.Position = UDim2.fromOffset(0, 50)
+Sidebar.BackgroundColor3 = Color3.fromRGB(17, 19, 23)
+Sidebar.BorderSizePixel = 0
+Sidebar.Parent = Main
 
-local statusDot = Instance.new("Frame")
-statusDot.Name = "Dot"
-statusDot.AnchorPoint = Vector2.new(0, 0.5)
-statusDot.Position = UDim2.new(0, 9, 0.5, 0)
-statusDot.Size = UDim2.new(0, 8, 0, 8)
-statusDot.BackgroundColor3 = Color3.fromRGB(120, 255, 160)
-statusDot.BorderSizePixel = 0
-statusDot.ZIndex = 7
-statusDot.Parent = statusFrame
+local SideLayout = Instance.new("UIListLayout")
+SideLayout.Padding = UDim.new(0, 5)
+SideLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+SideLayout.SortOrder = Enum.SortOrder.LayoutOrder
+SideLayout.Parent = Sidebar
 
-local dotCorner = Instance.new("UICorner")
-dotCorner.CornerRadius = UDim.new(1, 0)
-dotCorner.Parent = statusDot
+local SidePadding = Instance.new("UIPadding")
+SidePadding.PaddingTop = UDim.new(0, 12)
+SidePadding.PaddingLeft = UDim.new(0, 8)
+SidePadding.PaddingRight = UDim.new(0, 8)
+SidePadding.Parent = Sidebar
 
-local statusLabel = Instance.new("TextLabel")
-statusLabel.BackgroundTransparency = 1
-statusLabel.Position = UDim2.new(0, 25, 0, 0)
-statusLabel.Size = UDim2.new(1, -30, 1, 0)
-statusLabel.Text = "Ready"
-statusLabel.TextColor3 = Color3.fromRGB(190, 195, 210)
-statusLabel.TextSize = 12
-statusLabel.Font = Enum.Font.GothamMedium
-statusLabel.TextXAlignment = Enum.TextXAlignment.Left
-statusLabel.ZIndex = 7
-statusLabel.Parent = statusFrame
+--==================================================
+-- CONTENT
+--==================================================
 
-local farmBtn = Instance.new("TextButton")
-farmBtn.Name = "FarmButton"
-farmBtn.Position = UDim2.new(0, 15, 0, 94)
-farmBtn.Size = UDim2.new(1, -30, 0, 42)
-farmBtn.BackgroundColor3 = Color3.fromRGB(70, 190, 110)
-farmBtn.BorderSizePixel = 0
-farmBtn.AutoButtonColor = false
-farmBtn.Text = "FARM MONEY"
-farmBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-farmBtn.TextSize = 15
-farmBtn.Font = Enum.Font.GothamBold
-farmBtn.ZIndex = 6
-farmBtn.Parent = main
+local Content = Instance.new("Frame")
+Content.Size = UDim2.new(1, -135, 1, -50)
+Content.Position = UDim2.fromOffset(135, 50)
+Content.BackgroundColor3 = Color3.fromRGB(11, 12, 15)
+Content.BorderSizePixel = 0
+Content.Parent = Main
 
-local farmCorner = Instance.new("UICorner")
-farmCorner.CornerRadius = UDim.new(0, 10)
-farmCorner.Parent = farmBtn
+local Pages = {}
 
-local farmStroke = Instance.new("UIStroke")
-farmStroke.Color = Color3.fromRGB(130, 255, 170)
-farmStroke.Thickness = 1.3
-farmStroke.Transparency = 0.35
-farmStroke.Parent = farmBtn
+local function createPage(name)
+	local page = Instance.new("ScrollingFrame")
+	page.Name = name
+	page.Size = UDim2.new(1, 0, 1, 0)
+	page.BackgroundTransparency = 1
+	page.BorderSizePixel = 0
+	page.ScrollBarThickness = 4
+	page.ScrollBarImageColor3 = Color3.fromRGB(0, 130, 190)
+	page.CanvasSize = UDim2.new(0, 0, 0, 0)
+	page.Visible = false
+	page.Parent = Content
 
-local farmGradient = Instance.new("UIGradient")
-farmGradient.Color = ColorSequence.new({
-	ColorSequenceKeypoint.new(0, Color3.fromRGB(90, 215, 135)),
-	ColorSequenceKeypoint.new(1, Color3.fromRGB(55, 165, 95))
-})
-farmGradient.Rotation = 90
-farmGradient.Parent = farmBtn
+	local padding = Instance.new("UIPadding")
+	padding.PaddingTop = UDim.new(0, 14)
+	padding.PaddingBottom = UDim.new(0, 14)
+	padding.PaddingLeft = UDim.new(0, 14)
+	padding.PaddingRight = UDim.new(0, 14)
+	padding.Parent = page
 
-local speedLabel = Instance.new("TextLabel")
-speedLabel.Name = "SpeedLabel"
-speedLabel.BackgroundTransparency = 1
-speedLabel.Position = UDim2.new(0, 15, 0, 143)
-speedLabel.Size = UDim2.new(1, -30, 0, 16)
-speedLabel.Text = "Speed: " .. currentSpeed
-speedLabel.TextColor3 = Color3.fromRGB(175, 180, 195)
-speedLabel.TextSize = 11
-speedLabel.Font = Enum.Font.GothamMedium
-speedLabel.TextXAlignment = Enum.TextXAlignment.Left
-speedLabel.ZIndex = 6
-speedLabel.Parent = main
+	local layout = Instance.new("UIListLayout")
+	layout.Padding = UDim.new(0, 8)
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Parent = page
 
-local sliderBg = Instance.new("Frame")
-sliderBg.Name = "Slider"
-sliderBg.Position = UDim2.new(0, 15, 0, 165)
-sliderBg.Size = UDim2.new(1, -30, 0, 8)
-sliderBg.BackgroundColor3 = Color3.fromRGB(48, 52, 68)
-sliderBg.BorderSizePixel = 0
-sliderBg.ZIndex = 6
-sliderBg.Parent = main
+	layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+		page.CanvasSize = UDim2.fromOffset(0, layout.AbsoluteContentSize.Y + 28)
+	end)
 
-local sliderCorner = Instance.new("UICorner")
-sliderCorner.CornerRadius = UDim.new(1, 0)
-sliderCorner.Parent = sliderBg
+	Pages[name] = page
+	return page
+end
 
-local initialAlpha = (currentSpeed - MIN_SPEED) / (MAX_SPEED - MIN_SPEED)
+local MainPage = createPage("MainPage")
+local VisualPage = createPage("VisualPage")
+local EggsPage = createPage("EggsPage")
+local BadgesPage = createPage("BadgesPage")
+local SettingsPage = createPage("SettingsPage")
 
-local sliderFill = Instance.new("Frame")
-sliderFill.Name = "Fill"
-sliderFill.Size = UDim2.new(initialAlpha, 0, 1, 0)
-sliderFill.BackgroundColor3 = Color3.fromRGB(90, 215, 135)
-sliderFill.BorderSizePixel = 0
-sliderFill.ZIndex = 7
-sliderFill.Parent = sliderBg
+local sideButtons = {}
 
-local fillCorner = Instance.new("UICorner")
-fillCorner.CornerRadius = UDim.new(1, 0)
-fillCorner.Parent = sliderFill
+local function showPage(name)
+	for pageName, page in pairs(Pages) do
+		page.Visible = pageName == name
+	end
 
-local sliderKnob = Instance.new("Frame")
-sliderKnob.Name = "Knob"
-sliderKnob.AnchorPoint = Vector2.new(0.5, 0.5)
-sliderKnob.Position = UDim2.new(initialAlpha, 0, 0.5, 0)
-sliderKnob.Size = UDim2.new(0, 16, 0, 16)
-sliderKnob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-sliderKnob.BorderSizePixel = 0
-sliderKnob.ZIndex = 8
-sliderKnob.Parent = sliderBg
-
-local knobCorner = Instance.new("UICorner")
-knobCorner.CornerRadius = UDim.new(1, 0)
-knobCorner.Parent = sliderKnob
-
-local function pressEffect(button)
-	local originalSize = button.Size
-	local originalPosition = button.Position
-
-	button.Size = UDim2.new(
-		originalSize.X.Scale,
-		originalSize.X.Offset - 4,
-		originalSize.Y.Scale,
-		originalSize.Y.Offset - 4
-	)
-
-	button.Position = UDim2.new(
-		originalPosition.X.Scale,
-		originalPosition.X.Offset + 2,
-		originalPosition.Y.Scale,
-		originalPosition.Y.Offset + 2
-	)
-
-	task.delay(0.08, function()
-		if button and button.Parent then
-			button.Size = originalSize
-			button.Position = originalPosition
+	for buttonName, button in pairs(sideButtons) do
+		if buttonName == name then
+			button.BackgroundColor3 = Color3.fromRGB(0, 100, 145)
+			button.TextColor3 = Color3.fromRGB(255, 255, 255)
+		else
+			button.BackgroundColor3 = Color3.fromRGB(22, 24, 29)
+			button.TextColor3 = Color3.fromRGB(185, 190, 200)
 		end
+	end
+end
+
+local function createSideButton(text, pageName, order)
+	local button = Instance.new("TextButton")
+	button.Name = pageName .. "Button"
+	button.Size = UDim2.new(1, 0, 0, 40)
+	button.BackgroundColor3 = Color3.fromRGB(22, 24, 29)
+	button.BorderSizePixel = 0
+	button.Text = text
+	button.TextColor3 = Color3.fromRGB(185, 190, 200)
+	button.TextSize = 13
+	button.Font = Enum.Font.GothamMedium
+	button.LayoutOrder = order
+	button.Parent = Sidebar
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 7)
+	corner.Parent = button
+
+	button.MouseButton1Click:Connect(function()
+		showPage(pageName)
+	end)
+
+	sideButtons[pageName] = button
+end
+
+createSideButton("Main", "MainPage", 1)
+createSideButton("Visuals", "VisualPage", 2)
+createSideButton("Eggs", "EggsPage", 3)
+createSideButton("Badges", "BadgesPage", 4)
+createSideButton("Settings", "SettingsPage", 5)
+
+--==================================================
+-- PAGE UI HELPERS
+--==================================================
+
+local function createSectionTitle(parent, text)
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(1, -2, 0, 30)
+	label.BackgroundTransparency = 1
+	label.Text = text
+	label.TextColor3 = Color3.fromRGB(235, 238, 245)
+	label.TextSize = 17
+	label.Font = Enum.Font.GothamBold
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.Parent = parent
+	return label
+end
+
+local function createToggle(parent, text, callback, initial)
+	local button = Instance.new("TextButton")
+	button.Size = UDim2.new(1, -2, 0, 42)
+	button.BackgroundColor3 = Color3.fromRGB(22, 24, 29)
+	button.BorderSizePixel = 0
+	button.Text = ""
+	button.Parent = parent
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 7)
+	corner.Parent = button
+
+	local label = Instance.new("TextLabel")
+	label.BackgroundTransparency = 1
+	label.Position = UDim2.fromOffset(12, 0)
+	label.Size = UDim2.new(1, -70, 1, 0)
+	label.Text = text
+	label.TextColor3 = Color3.fromRGB(215, 218, 225)
+	label.TextSize = 13
+	label.Font = Enum.Font.GothamMedium
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.Parent = button
+
+	local state = initial == true
+
+	local indicator = Instance.new("Frame")
+	indicator.Size = UDim2.fromOffset(38, 20)
+	indicator.Position = UDim2.new(1, -50, 0.5, -10)
+	indicator.BorderSizePixel = 0
+	indicator.Parent = button
+
+	local indicatorCorner = Instance.new("UICorner")
+	indicatorCorner.CornerRadius = UDim.new(1, 0)
+	indicatorCorner.Parent = indicator
+
+	local knob = Instance.new("Frame")
+	knob.Size = UDim2.fromOffset(16, 16)
+	knob.BorderSizePixel = 0
+	knob.Parent = indicator
+
+	local knobCorner = Instance.new("UICorner")
+	knobCorner.CornerRadius = UDim.new(1, 0)
+	knobCorner.Parent = knob
+
+	local function refresh()
+		if state then
+			indicator.BackgroundColor3 = Color3.fromRGB(0, 150, 210)
+			knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+			knob.Position = UDim2.new(1, -18, 0.5, -8)
+		else
+			indicator.BackgroundColor3 = Color3.fromRGB(55, 58, 65)
+			knob.BackgroundColor3 = Color3.fromRGB(170, 175, 185)
+			knob.Position = UDim2.fromOffset(2, 2)
+		end
+	end
+
+	button.MouseButton1Click:Connect(function()
+		state = not state
+		refresh()
+		callback(state)
+	end)
+
+	refresh()
+	return button
+end
+
+local function createAction(parent, text, callback)
+	local button = Instance.new("TextButton")
+	button.Size = UDim2.new(1, -2, 0, 42)
+	button.BackgroundColor3 = Color3.fromRGB(22, 24, 29)
+	button.BorderSizePixel = 0
+	button.Text = text
+	button.TextColor3 = Color3.fromRGB(215, 218, 225)
+	button.TextSize = 13
+	button.Font = Enum.Font.GothamMedium
+	button.Parent = parent
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 7)
+	corner.Parent = button
+
+	button.MouseButton1Click:Connect(callback)
+	return button
+end
+
+--==================================================
+-- HIGHLIGHT SYSTEM
+--==================================================
+
+local function clearHighlightGroup(group)
+	for i = #activeHighlights, 1, -1 do
+		local item = activeHighlights[i]
+		if item.group == group then
+			if item.highlight and item.highlight.Parent then
+				item.highlight:Destroy()
+			end
+			table.remove(activeHighlights, i)
+		end
+	end
+end
+
+local function addHighlight(target, group)
+	if not target or not target.Parent then
+		return
+	end
+
+	local highlight = Instance.new("Highlight")
+	highlight.Name = "FarmMoneyHighlight"
+	highlight.FillColor = HIGHLIGHT_COLOR
+	highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+	highlight.FillTransparency = 0.55
+	highlight.OutlineTransparency = 0
+	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+
+	if target:IsA("Model") or target:IsA("BasePart") then
+		highlight.Adornee = target
+		highlight.Parent = target
+		table.insert(activeHighlights, {
+			highlight = highlight,
+			group = group
+		})
+		return
+	end
+
+	local found = false
+	for _, descendant in ipairs(target:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			local h = Instance.new("Highlight")
+			h.Name = "FarmMoneyHighlight"
+			h.FillColor = HIGHLIGHT_COLOR
+			h.OutlineColor = Color3.fromRGB(255, 255, 255)
+			h.FillTransparency = 0.55
+			h.OutlineTransparency = 0
+			h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+			h.Adornee = descendant
+			h.Parent = descendant
+
+			table.insert(activeHighlights, {
+				highlight = h,
+				group = group
+			})
+			found = true
+		end
+	end
+
+	if not found then
+		highlight:Destroy()
+	end
+end
+
+local function highlightExactName(name, group)
+	clearHighlightGroup(group)
+
+	local found = 0
+
+	for _, object in ipairs(workspace:GetDescendants()) do
+		if object.Name == name then
+			addHighlight(object, group)
+			found += 1
+		end
+	end
+
+	return found
+end
+
+local function highlightContainsName(text, group)
+	clearHighlightGroup(group)
+
+	local wanted = string.lower(text)
+
+	for _, object in ipairs(workspace:GetDescendants()) do
+		if string.find(string.lower(object.Name), wanted, 1, true) then
+			addHighlight(object, group)
+		end
+	end
+end
+
+--==================================================
+-- MAIN PAGE
+--==================================================
+
+createSectionTitle(MainPage, "Player")
+
+createToggle(MainPage, "Inf Jump", function(value)
+	infJump = value
+end, false)
+
+createToggle(MainPage, "Immortality", function(value)
+	godMode = value
+	applyGodMode()
+end, false)
+
+createToggle(MainPage, "X3 Speed", function(value)
+	speed3x = value
+	setSpeed()
+end, false)
+
+createSectionTitle(MainPage, "Quick Visuals")
+
+for i = 1, 10 do
+	local number = i
+	createAction(MainPage, "Подсветить " .. number, function()
+		highlightExactName(tostring(number), "Number_" .. number)
 	end)
 end
 
-local sliderDragging = false
+--==================================================
+-- VISUAL PAGE
+--==================================================
 
-local function updateSlider(inputX)
-	local absolutePosition = sliderBg.AbsolutePosition
-	local absoluteSize = sliderBg.AbsoluteSize
+createSectionTitle(VisualPage, "Object search")
 
-	if absoluteSize.X <= 0 then
-		return
-	end
+createAction(VisualPage, "Подсветить Button", function()
+	highlightContainsName("button", "Button")
+end)
 
-	local alpha = math.clamp(
-		(inputX - absolutePosition.X) / absoluteSize.X,
-		0,
-		1
-	)
+createAction(VisualPage, "Убрать подсветку Button", function()
+	clearHighlightGroup("Button")
+end)
 
-	local newSpeed = math.floor(
-		MIN_SPEED + alpha * (MAX_SPEED - MIN_SPEED) + 0.5
-	)
-
-	currentSpeed = newSpeed
-	sliderFill.Size = UDim2.new(alpha, 0, 1, 0)
-	sliderKnob.Position = UDim2.new(alpha, 0, 0.5, 0)
-	speedLabel.Text = "Speed: " .. currentSpeed
-end
-
-sliderBg.InputBegan:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1
-		or input.UserInputType == Enum.UserInputType.Touch then
-		sliderDragging = true
-		updateSlider(input.Position.X)
+createAction(VisualPage, "Убрать всю подсветку", function()
+	for i = #activeHighlights, 1, -1 do
+		local item = activeHighlights[i]
+		if item.highlight and item.highlight.Parent then
+			item.highlight:Destroy()
+		end
+		table.remove(activeHighlights, i)
 	end
 end)
 
-UserInputService.InputChanged:Connect(function(input)
-	if not sliderDragging then
-		return
-	end
+createSectionTitle(VisualPage, "Numbers 1–10")
 
-	if input.UserInputType == Enum.UserInputType.MouseMovement
-		or input.UserInputType == Enum.UserInputType.Touch then
-		updateSlider(input.Position.X)
+for i = 1, 10 do
+	local number = i
+	createAction(VisualPage, "Подсветить " .. number, function()
+		highlightExactName(tostring(number), "Number_" .. number)
+	end)
+end
+
+--==================================================
+-- EGG PAGE
+--==================================================
+
+createSectionTitle(EggsPage, "Egg1 – Egg10")
+
+for i = 1, 10 do
+	local number = i
+	createAction(EggsPage, "Подсветить Egg" .. number, function()
+		highlightExactName("Egg" .. number, "Egg_" .. number)
+	end)
+end
+
+createAction(EggsPage, "Убрать подсветку Egg", function()
+	for i = 1, 10 do
+		clearHighlightGroup("Egg_" .. i)
 	end
 end)
 
-UserInputService.InputEnded:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1
-		or input.UserInputType == Enum.UserInputType.Touch then
-		sliderDragging = false
+--==================================================
+-- BADGE PAGE
+--==================================================
+
+createSectionTitle(BadgesPage, "Badge1 – Badge10")
+
+for i = 1, 10 do
+	local number = i
+	createAction(BadgesPage, "Подсветить Badge" .. number, function()
+		highlightExactName("Badge" .. number, "Badge_" .. number)
+	end)
+end
+
+createAction(BadgesPage, "Убрать подсветку Badge", function()
+	for i = 1, 10 do
+		clearHighlightGroup("Badge_" .. i)
 	end
 end)
 
-local function findCoinServer()
-	local container = workspace:FindFirstChild(CONTAINER_NAME, true)
+--==================================================
+-- SETTINGS PAGE
+--==================================================
 
-	if not container then
-		return nil
-	end
+createSectionTitle(SettingsPage, "Menu")
 
-	-- Ищем coin_server без учёта регистра:
-	-- coin_server
-	-- Coin_Server
-	-- COin_SErver
-	-- COIN_SERVER
-	-- и любые другие варианты регистра.
-	local targetLower = string.lower(TARGET_NAME)
+createAction(SettingsPage, "Закрыть меню", function()
+	Main.Visible = false
+	OpenButton.Visible = true
+end)
 
-	for _, descendant in ipairs(container:GetDescendants()) do
-		if string.lower(descendant.Name) == targetLower then
-			return descendant
+createAction(SettingsPage, "Убрать всю подсветку", function()
+	for i = #activeHighlights, 1, -1 do
+		local item = activeHighlights[i]
+		if item.highlight and item.highlight.Parent then
+			item.highlight:Destroy()
 		end
+		table.remove(activeHighlights, i)
 	end
+end)
 
-	-- На случай, если сам CoinContainer является нужным объектом.
-	if string.lower(container.Name) == targetLower then
-		return container
-	end
+createAction(SettingsPage, "Сбросить скорость", function()
+	speed3x = false
+	setSpeed()
+end)
 
-	return nil
-end
+--==================================================
+-- INFINITE JUMP
+--==================================================
 
-local function getTargetCFrame(target)
-	if not target then
-		return nil
-	end
-
-	if target:IsA("BasePart") then
-		return target.CFrame
-	end
-
-	if target:IsA("Model") then
-		if target.PrimaryPart then
-			return target.PrimaryPart.CFrame
-		end
-
-		return target:GetPivot()
-	end
-
-	if target:IsA("Attachment") then
-		return target.WorldCFrame
-	end
-
-	return nil
-end
-
-local function stopFly()
-	if activeTween then
-		pcall(function()
-			activeTween:Cancel()
-		end)
-
-		activeTween = nil
-	end
-
-	local character = player.Character
-
-	if character then
-		local root = character:FindFirstChild("HumanoidRootPart")
-		local humanoid = character:FindFirstChildOfClass("Humanoid")
-
-		if root then
-			root.Anchored = false
-		end
-
-		if humanoid then
-			humanoid.PlatformStand = false
-
-			pcall(function()
-				humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
-			end)
-		end
-	end
-
-	isFlying = false
-	farmBtn.Text = "FARM MONEY"
-	statusLabel.Text = "Ready"
-	statusDot.BackgroundColor3 = Color3.fromRGB(120, 255, 160)
-end
-
-local function startFly()
-	if isFlying then
-		stopFly()
+UserInputService.JumpRequest:Connect(function()
+	if not infJump then
 		return
 	end
 
-	local target = findCoinServer()
-
-	if not target then
-		statusLabel.Text = "coin_server not found"
-		statusDot.BackgroundColor3 = Color3.fromRGB(255, 100, 100)
-
-		warn("[FarmMoney] coin_server не найден в " .. CONTAINER_NAME .. "!")
-		return
-	end
-
-	local targetCFrame = getTargetCFrame(target)
-
-	if not targetCFrame then
-		statusLabel.Text = "Invalid target"
-		statusDot.BackgroundColor3 = Color3.fromRGB(255, 100, 100)
-
-		warn("[FarmMoney] Не удалось получить позицию coin_server!")
-		return
-	end
-
-	local character = player.Character
-
-	if not character then
-		character = player.CharacterAdded:Wait()
-	end
-
-	local root = character:FindFirstChild("HumanoidRootPart")
-
-	if not root then
-		root = character:WaitForChild("HumanoidRootPart", 5)
-	end
-
-	if not root then
-		statusLabel.Text = "Character error"
-		statusDot.BackgroundColor3 = Color3.fromRGB(255, 100, 100)
-
-		warn("[FarmMoney] HumanoidRootPart не найден!")
-		return
-	end
-
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
-
-	isFlying = true
-	farmBtn.Text = "STOP FARM"
-	statusLabel.Text = "Flying to coin..."
-	statusDot.BackgroundColor3 = Color3.fromRGB(255, 210, 80)
-
+	local humanoid = getHumanoid()
 	if humanoid then
-		humanoid.PlatformStand = true
-
-		pcall(function()
-			humanoid:ChangeState(Enum.HumanoidStateType.Physics)
-		end)
+		humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
 	end
+end)
 
-	root.Anchored = true
+--==================================================
+-- CONTINUOUS LOCAL PROTECTION
+--==================================================
 
-	local distance = (targetCFrame.Position - root.Position).Magnitude
-	local duration = distance / math.max(currentSpeed, 1)
-	duration = math.max(duration, 0.05)
-
-	local tweenInfo = TweenInfo.new(
-		duration,
-		Enum.EasingStyle.Linear,
-		Enum.EasingDirection.Out,
-		0,
-		false,
-		0
-	)
-
-	local tween = TweenService:Create(
-		root,
-		tweenInfo,
-		{ CFrame = targetCFrame }
-	)
-
-	activeTween = tween
-
-	tween.Completed:Connect(function()
-		if activeTween ~= tween then
-			return
+RunService.Heartbeat:Connect(function()
+	if godMode then
+		local humanoid = getHumanoid()
+		if humanoid then
+			if humanoid.MaxHealth ~= math.huge then
+				humanoid.MaxHealth = math.huge
+			end
+			if humanoid.Health < math.huge then
+				humanoid.Health = math.huge
+			end
+			humanoid:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
 		end
-
-		activeTween = nil
-		stopFly()
-	end)
-
-	tween:Play()
-end
-
-farmBtn.MouseButton1Click:Connect(function()
-	pressEffect(farmBtn)
-	startFly()
-end)
-
-openButton.MouseButton1Click:Connect(function()
-	pressEffect(openButton)
-	main.Visible = true
-	openButton.Visible = false
-end)
-
-closeButton.MouseButton1Click:Connect(function()
-	pressEffect(closeButton)
-	main.Visible = false
-	openButton.Visible = true
-end)
-
-local draggingMenu = false
-local dragStart = nil
-local startPosition = nil
-local dragInput = nil
-
-local function updateMenuDrag(input)
-	if not draggingMenu or not dragStart or not startPosition then
-		return
 	end
 
-	local delta = input.Position - dragStart
+	if speed3x then
+		local humanoid = getHumanoid()
+		if humanoid and humanoid.WalkSpeed ~= 48 then
+			humanoid.WalkSpeed = 48
+		end
+	end
+end)
 
-	main.Position = UDim2.new(
-		startPosition.X.Scale,
-		startPosition.X.Offset + delta.X,
-		startPosition.Y.Scale,
-		startPosition.Y.Offset + delta.Y
-	)
-end
+--==================================================
+-- OPEN / CLOSE
+--==================================================
 
-topBar.InputBegan:Connect(function(input)
+CloseButton.MouseButton1Click:Connect(function()
+	Main.Visible = false
+	OpenButton.Visible = true
+end)
+
+OpenButton.MouseButton1Click:Connect(function()
+	Main.Visible = true
+	OpenButton.Visible = false
+end)
+
+--==================================================
+-- MOBILE DRAGGING
+--==================================================
+
+local dragging = false
+local dragStart
+local startPos
+
+Header.InputBegan:Connect(function(input)
 	if input.UserInputType == Enum.UserInputType.MouseButton1
 		or input.UserInputType == Enum.UserInputType.Touch then
 
-		local mousePos = input.Position
-		local closePos = closeButton.AbsolutePosition
-		local closeSize = closeButton.AbsoluteSize
-
-		local insideClose =
-			mousePos.X >= closePos.X
-			and mousePos.X <= closePos.X + closeSize.X
-			and mousePos.Y >= closePos.Y
-			and mousePos.Y <= closePos.Y + closeSize.Y
-
-		if insideClose then
-			return
-		end
-
-		draggingMenu = true
+		dragging = true
 		dragStart = input.Position
-		startPosition = main.Position
-		dragInput = input
-	end
-end)
+		startPos = Main.Position
 
-topBar.InputChanged:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseMovement
-		or input.UserInputType == Enum.UserInputType.Touch then
-		dragInput = input
+		input.Changed:Connect(function()
+			if input.UserInputState == Enum.UserInputState.End then
+				dragging = false
+			end
+		end)
 	end
 end)
 
 UserInputService.InputChanged:Connect(function(input)
-	if draggingMenu and input == dragInput then
-		updateMenuDrag(input)
+	if not dragging then
+		return
 	end
-end)
 
-UserInputService.InputEnded:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1
+	if input.UserInputType == Enum.UserInputType.MouseMovement
 		or input.UserInputType == Enum.UserInputType.Touch then
 
-		draggingMenu = false
-		dragStart = nil
-		startPosition = nil
-		dragInput = nil
+		local delta = input.Position - dragStart
+
+		Main.Position = UDim2.new(
+			startPos.X.Scale,
+			startPos.X.Offset + delta.X,
+			startPos.Y.Scale,
+			startPos.Y.Offset + delta.Y
+		)
 	end
 end)
 
-player.CharacterAdded:Connect(function()
-	if activeTween then
-		pcall(function()
-			activeTween:Cancel()
-		end)
+--==================================================
+-- INITIAL PAGE
+--==================================================
 
-		activeTween = nil
-	end
-
-	isFlying = false
-	farmBtn.Text = "FARM MONEY"
-	statusLabel.Text = "Ready"
-	statusDot.BackgroundColor3 = Color3.fromRGB(120, 255, 160)
-end)
-
-print("[FarmMoney] GUI loaded successfully.")
+showPage("MainPage")
+Main.Visible = true
+OpenButton.Visible = false
