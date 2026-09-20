@@ -1217,6 +1217,71 @@ local function attackTarget(target)
     end
 end
 
+local function findGunDrop()
+    local wanted = "gundrop"
+
+    for _, object in ipairs(workspace:GetDescendants()) do
+        local lowerName = string.lower(object.Name)
+
+        if lowerName == wanted then
+            if object:IsA("Model") or object:IsA("BasePart") then
+                return object
+            end
+        end
+    end
+
+    return nil
+end
+
+local function getObjectCFrame(object)
+    if not object then
+        return nil
+    end
+
+    if object:IsA("Model") then
+        return object:GetPivot()
+    elseif object:IsA("BasePart") then
+        return object.CFrame
+    end
+
+    return nil
+end
+
+local function teleportToGunDrop()
+    local _, root = getCharacter()
+
+    if not root then
+        setStatus("Character not found", C.Red)
+        return
+    end
+
+    local gunDrop = findGunDrop()
+
+    if not gunDrop then
+        setStatus("GunDrop not found", C.Red)
+        return
+    end
+
+    local targetCFrame = getObjectCFrame(gunDrop)
+
+    if not targetCFrame then
+        setStatus("GunDrop position not found", C.Red)
+        return
+    end
+
+    local originalCFrame = root.CFrame
+
+    root.CFrame = targetCFrame + Vector3.new(0, 3, 0)
+    setStatus("At GunDrop", C.Green)
+
+    task.wait(0.35)
+
+    if root.Parent then
+        root.CFrame = originalCFrame
+        setStatus("Returned to original position", C.Text2)
+    end
+end
+
 local function stopCombat()
     combatRunning = false
 
@@ -1278,7 +1343,7 @@ local function runCombat(targets)
     end)
 end
 
-local combatCard = createCard(combatPage, "Combat", 5, 5, 500, 350)
+local combatCard = createCard(combatPage, "Combat", 5, 5, 500, 400)
 
 makeLabel(
     combatCard,
@@ -1312,11 +1377,15 @@ local function combatButton(text, y, callback)
     return b
 end
 
-combatButton("KILL ALL", 82, function()
+combatButton("TP TO GUNDROP", 82, function()
+    teleportToGunDrop()
+end)
+
+combatButton("KILL ALL", 132, function()
     runCombat(getAllTargets())
 end)
 
-combatButton("KILL SHERIFF", 132, function()
+combatButton("KILL SHERIFF", 182, function()
     local target = findRoleTarget("Sheriff")
     if target then
         runCombat({target})
@@ -1325,7 +1394,7 @@ combatButton("KILL SHERIFF", 132, function()
     end
 end)
 
-combatButton("KILL MURDER", 182, function()
+combatButton("KILL MURDER", 232, function()
     local target = findRoleTarget("Murder")
     if target then
         runCombat({target})
@@ -1334,14 +1403,14 @@ combatButton("KILL MURDER", 182, function()
     end
 end)
 
-combatButton("STOP / RETURN", 232, function()
+combatButton("STOP / RETURN", 282, function()
     stopCombat()
 end)
 
 makeLabel(
     combatCard,
     "Targets include players and Humanoid NPCs.",
-    UDim2.new(0, 18, 0, 294),
+    UDim2.new(0, 18, 0, 345),
     UDim2.new(1, -36, 0, 20),
     Enum.Font.GothamMedium,
     9,
@@ -1465,6 +1534,71 @@ local function findCoinServer()
 end
 
 --============================================================
+-- TARGET / INVENTORY HELPERS
+--============================================================
+
+local function findByNameInsensitive(root, wantedName)
+    if not root then
+        return nil
+    end
+
+    local wanted = string.lower(wantedName)
+
+    if string.lower(root.Name) == wanted then
+        return root
+    end
+
+    for _, object in ipairs(root:GetDescendants()) do
+        if string.lower(object.Name) == wanted then
+            return object
+        end
+    end
+
+    return nil
+end
+
+local function findGunDrop()
+    -- Ищем GunDrop по всей карте без учёта регистра.
+    -- Поэтому подходят GunDrop, gundrop, GUNDROP, GuNdRoP и т.д.
+    return findByNameInsensitive(workspace, "GunDrop")
+end
+
+local function playerHasGun()
+    local character = player.Character
+    local backpack = player:FindFirstChildOfClass("Backpack")
+
+    if character and findByNameInsensitive(character, "Gun") then
+        return true
+    end
+
+    if backpack and findByNameInsensitive(backpack, "Gun") then
+        return true
+    end
+
+    return false
+end
+
+local function getObjectPosition(object)
+    if not object then
+        return nil
+    end
+
+    if object:IsA("BasePart") then
+        return object.Position
+    end
+
+    if object:IsA("Model") then
+        return object:GetPivot().Position
+    end
+
+    if object:IsA("Attachment") then
+        return object.WorldPosition
+    end
+
+    return nil
+end
+
+--============================================================
 -- TARGET CFRAME
 --============================================================
 
@@ -1507,6 +1641,48 @@ local function getCharacter()
     end
 
     return character, root, humanoid
+end
+
+--============================================================
+-- GUNDROP INSTANT TELEPORT
+--============================================================
+
+local function teleportToGunDropAndBack()
+    local character, root, humanoid = getCharacter()
+
+    if not character or not root then
+        setStatus("Character not ready", C.Red)
+        return
+    end
+
+    local gunDrop = findGunDrop()
+
+    if not gunDrop then
+        setStatus("GunDrop not found", C.Red)
+        return
+    end
+
+    -- Сохраняем именно исходный CFrame (позиция + направление взгляда).
+    local originalCFrame = root.CFrame
+    local targetPosition = getObjectPosition(gunDrop)
+
+    if not targetPosition then
+        setStatus("Invalid GunDrop", C.Red)
+        return
+    end
+
+    -- Моментальный TP к GunDrop.
+    root.CFrame = CFrame.new(targetPosition)
+
+    -- Сразу возвращаем исходный CFrame.
+    root.CFrame = originalCFrame
+
+    -- Проверка инвентаря после TP/возврата.
+    if playerHasGun() then
+        setStatus("Gun found in inventory", C.Green)
+    else
+        setStatus("Gun not found", C.Text2)
+    end
 end
 
 --============================================================
